@@ -64,3 +64,84 @@ void displayReadings();
 float calculateTdsValue(int rawReading);
 float calculatePHValue(int rawReading);
 float calculateTurbidityValue(int rawReading);
+
+
+void rainTipInterrupt() {
+  unsigned long currentTime = millis();
+  if (currentTime - lastRainTip > 100) {
+    rainTipCount++;
+    lastRainTip = currentTime;
+  }
+}
+
+void setup() {
+  Serial.begin(9600);
+  Serial.println("Agricultural Sensor System Initializing...");
+  
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  pinMode(ERROR_LED_PIN, OUTPUT);
+  pinMode(RAIN_SENSOR_PIN, INPUT_PULLUP);
+  
+  dht.begin();
+  airTempSensor.begin();
+  
+  attachInterrupt(digitalPinToInterrupt(RAIN_SENSOR_PIN), rainTipInterrupt, FALLING);
+  
+  if (!rtc.begin()) {
+    handleErrors("RTC initialization failed");
+  }
+  
+  if (rtc.lostPower()) {
+    Serial.println("RTC lost power, setting time to compile time...");
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+  }
+  
+  Serial.print("Initializing SD card...");
+  if (!SD.begin(SD_CS_PIN)) {
+    Serial.println("Failed!");
+    handleErrors("SD card initialization failed");
+  } else {
+    Serial.println("Done!");
+    sdCardAvailable = true;
+    
+    dataFile = SD.open("AGDATA.CSV", FILE_WRITE);
+    if (dataFile) {
+      if (dataFile.size() == 0) {
+        dataFile.println("Date,Time,CropTemp,AirTemp,CropStress,Rainfall,CropHeight,TDS,pH,Turbidity,Humidity,Temperature");
+      }
+      dataFile.close();
+    } else {
+      handleErrors("Could not create data file");
+    }
+  }
+  
+  readCropGrowthSensor();
+  cropHeight = 0;
+  
+  Serial.println("System initialization complete!");
+  digitalWrite(ERROR_LED_PIN, LOW);
+}
+
+void loop() {
+  if (millis() - lastReadingTime >= 15000) {
+    readCropStressSensor();
+    readRainfallSensor();
+    readCropGrowthSensor();
+    readWaterQualitySensors();
+    readHumiditySensor();
+    
+    displayReadings();
+    lastReadingTime = millis();
+  }
+  
+  if (millis() - lastLogTime >= 600000) {
+    logData();
+    lastLogTime = millis();
+  }
+  
+  checkAlerts();
+  
+  delay(100);
+}
+
