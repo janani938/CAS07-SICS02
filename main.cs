@@ -1,147 +1,150 @@
+
+#define BLYNK_TEMPLATE_ID "TMPL3OSKgku4doR"
+#define BLYNK_TEMPLATE_NAME "IOT Based Agriculture System"
+#define BLYNK_AUTH_TOKEN "fQrObEhbsdf10MGJbaIbsDUoqkdlghutyyMJHg7HmTJ"
+
+#define BLYNK_PRINT Serial
+#include <ESP8266WiFi.h>
+#include <BlynkSimpleEsp8266.h>
 #include <DHT.h>
-#include <OneWire.h>
-#include <DallasTemperature.h>
-#include <SD.h>
-#include <SPI.h>
-#include <RTClib.h>
+#include <LiquidCrystal_I2C.h> // Include the I2C LCD library
 
-#define CROP_TEMP_PIN A0
-#define AIR_TEMP_PIN 2
-#define RAIN_SENSOR_PIN 3
-#define TRIG_PIN 4
-#define ECHO_PIN 5
-#define TDS_SENSOR_PIN A1
-#define PH_SENSOR_PIN A2
-#define TURBIDITY_SENSOR_PIN A3
-#define DHT_PIN 6
-#define SD_CS_PIN 10
-#define ERROR_LED_PIN 8
+#define SOIL_MOISTURE_PIN A0
+#define THRESHOLD_MOISTURE 10
+#define PUMP_PIN D1
+#define PUMP_SWITCH V6
+#define DHT_PIN D2
+#define DHT_TYPE DHT11
+#define RAIN_SENSOR_PIN A0
 
-#define DHT_TYPE DHT22
-#define RAIN_FACTOR 0.2794
-#define CROP_HEIGHT_BASELINE 100
+char auth[] = BLYNK_AUTH_TOKEN;
+char ssid[] = "WiFi Username";
+char pass[] = "WiFi Password";
 
 DHT dht(DHT_PIN, DHT_TYPE);
-OneWire oneWire(AIR_TEMP_PIN);
-DallasTemperature airTempSensor(&oneWire);
-RTC_DS3231 rtc;
-File dataFile;
+LiquidCrystal_I2C lcd(0x27, 16, 2); // Change the address to your LCD's address
 
-volatile int rainTipCount = 0;
-unsigned long lastRainTip = 0;
-unsigned long lastReadingTime = 0;
-unsigned long lastLogTime = 0;
-bool sdCardAvailable = false;
-float cropHeight = 0;
+BlynkTimer timer;
 
-float cropTemp = 0;
-float airTemp = 0;
-float cropStress = 0;
-float rainfall = 0;
-float tdsValue = 0;
-float pHValue = 0;
-float turbidityValue = 0;
-float humidity = 0;
-float temperature = 0;
+bool isPumpOn = false;
 
-const float CROP_STRESS_THRESHOLD = 5.0;
-const float RAINFALL_ALERT = 10.0;
-const float TDS_MIN = 300.0;
-const float TDS_MAX = 1500.0;
-const float PH_MIN = 5.5;
-const float PH_MAX = 7.5;
-const float HUMIDITY_MIN = 40.0;
-const float HUMIDITY_MAX = 80.0;
+int temt6000Pin = A0;
+float light;
+int light_value;
 
-void readCropStressSensor();
-void readRainfallSensor();
-void readCropGrowthSensor();
-void readWaterQualitySensors();
-void readHumiditySensor();
-void logData();
-void handleErrors(const char* errorSource);
-void displayReadings();
-float calculateTdsValue(int rawReading);
-float calculatePHValue(int rawReading);
-float calculateTurbidityValue(int rawReading);
-
-
-void rainTipInterrupt() {
-  unsigned long currentTime = millis();
-  if (currentTime - lastRainTip > 100) {
-    rainTipCount++;
-    lastRainTip = currentTime;
+void sendSensorData()
+{
+  int soilMoisture = analogRead(SOIL_MOISTURE_PIN);
+  int soilMoisturePercentage = map(soilMoisture, 400, 1023, 100, 0);
+  Serial.print("Soil Moisture Percentage ");
+  Serial.println(soilMoisturePercentage);
+  float temperature = dht.readTemperature();
+  float humidity = dht.readHumidity();
+  Serial.print("Temperature");
+  Serial.println(temperature);
+  Serial.print("Humidity");
+  Serial.println(humidity);
+  if (!isnan(temperature) && !isnan(humidity))
+  {
+    Blynk.virtualWrite(V0, temperature);
+    Blynk.virtualWrite(V1, humidity);
   }
-}
+  else
+  {
+    Serial.println("Failed to read data from DHT sensor!");
+  }
+  Blynk.virtualWrite(V2, soilMoisturePercentage);
 
-void setup() {
-  Serial.begin(9600);
-  Serial.println("Agricultural Sensor System Initializing...");
+  int rainsensorValue = analogRead(RAIN_SENSOR_PIN);
+  int rainValue = map(rainsensorValue, 400, 1023, 100, 0);
   
-  pinMode(TRIG_PIN, OUTPUT);
-  pinMode(ECHO_PIN, INPUT);
-  pinMode(ERROR_LED_PIN, OUTPUT);
-  pinMode(RAIN_SENSOR_PIN, INPUT_PULLUP);
+  Serial.print("Rain Sensor Value: ");
+  Serial.println(rainValue);
+  Blynk.virtualWrite(V4, rainValue); // Send rain sensor value to Blynk
   
-  dht.begin();
-  airTempSensor.begin();
+  light_value = analogRead(temt6000Pin);
+  light = light_value * 0.0976; // percentage calculation
+  Serial.print("Light");
+  Serial.println(light);
+  //Blynk.virtualWrite(V3, light_value); // Send raw light value to Blynk
+  Blynk.virtualWrite(V3, light);       // Send light percentage to Blynk
   
-  attachInterrupt(digitalPinToInterrupt(RAIN_SENSOR_PIN), rainTipInterrupt, FALLING);
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Soil Moisture: ");
+  lcd.print(soilMoisturePercentage);
+  lcd.print("%");
+  lcd.setCursor(0, 1);
+  lcd.print("Temp: ");
+  lcd.print(temperature);
+  lcd.print("C");
+  lcd.setCursor(10, 1);
+  lcd.print("Humidity: ");
+  lcd.print(humidity);
+  lcd.print("%");
+  lcd.setCursor(0, 2);
+  lcd.print("Rain Sensor: ");
+  lcd.print(rainValue);
+  lcd.print("   ");
+
+  lcd.setCursor(0, 3);
+  lcd.print("Light Intensity: ");
+  lcd.print(light_value); // Display raw light value
+  lcd.print(" | ");
+  lcd.print(light); // Display light percentage
+
   
-  if (!rtc.begin()) {
-    handleErrors("RTC initialization failed");
-  }
-  
-  if (rtc.lostPower()) {
-    Serial.println("RTC lost power, setting time to compile time...");
-    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
-  }
-  
-  Serial.print("Initializing SD card...");
-  if (!SD.begin(SD_CS_PIN)) {
-    Serial.println("Failed!");
-    handleErrors("SD card initialization failed");
-  } else {
-    Serial.println("Done!");
-    sdCardAvailable = true;
-    
-    dataFile = SD.open("AGDATA.CSV", FILE_WRITE);
-    if (dataFile) {
-      if (dataFile.size() == 0) {
-        dataFile.println("Date,Time,CropTemp,AirTemp,CropStress,Rainfall,CropHeight,TDS,pH,Turbidity,Humidity,Temperature");
-      }
-      dataFile.close();
-    } else {
-      handleErrors("Could not create data file");
+  if (isPumpOn || soilMoisturePercentage < THRESHOLD_MOISTURE || rainValue > 500)
+  {
+    digitalWrite(PUMP_PIN, HIGH);
+    if (!isPumpOn)
+    {
+      Blynk.logEvent("moisture_alert", "Soil moisture is below the threshold!");
+      Serial.println("Soil moisture is below the threshold!");
     }
   }
-  
-  readCropGrowthSensor();
-  cropHeight = 0;
-  
-  Serial.println("System initialization complete!");
-  digitalWrite(ERROR_LED_PIN, LOW);
+  else
+  {
+    if (!isPumpOn)
+    {
+      digitalWrite(PUMP_PIN, LOW);
+    }
+  }
 }
 
-void loop() {
-  if (millis() - lastReadingTime >= 15000) {
-    readCropStressSensor();
-    readRainfallSensor();
-    readCropGrowthSensor();
-    readWaterQualitySensors();
-    readHumiditySensor();
-    
-    displayReadings();
-    lastReadingTime = millis();
+BLYNK_WRITE(PUMP_SWITCH)
+{
+  isPumpOn = param.asInt();
+  if (isPumpOn)
+  {
+    Serial.println("Pump manually turned ON");
   }
-  
-  if (millis() - lastLogTime >= 600000) {
-    logData();
-    lastLogTime = millis();
+  else
+  {
+    Serial.println("Pump manually turned OFF");
   }
-  
-  checkAlerts();
-  
-  delay(100);
 }
 
+void setup()
+{
+  Serial.begin(9600);
+  pinMode(PUMP_PIN, OUTPUT);
+  pinMode(RAIN_SENSOR_PIN, INPUT);
+  dht.begin();
+
+  lcd.begin(); // Initialize LCD
+  //lcd.backlight();
+
+  Blynk.begin(auth, ssid, pass);
+
+  timer.setInterval(3000L, sendSensorData);
+
+  Blynk.virtualWrite(PUMP_SWITCH, isPumpOn);
+  Blynk.syncVirtual(PUMP_SWITCH);
+}
+
+void loop()
+{
+  Blynk.run();
+  timer.run();
+}
